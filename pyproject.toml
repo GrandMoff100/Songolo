@@ -10,9 +10,17 @@ python = "^3.8"
 youtube_dl = "^2021.12.17"
 pygit2 = "^1.8.0"
 fastapi = "^0.73.0"
+eyed3 = "^0.9.6"
 
 [tool.poetry.dev-dependencies]
+black = "^22.1.0"
+isort = "^5.10.1"
+mypy = "^0.931"
+flake8 = "^4.0.1"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.isort]
+profile = "black"
