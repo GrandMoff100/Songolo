@@ -59,4 +59,13 @@ class Song(BaseModel):
             ydl.download([self.link])
 
     def _options(self):
-        return {}
+        return {
+            "extractaudio": True,
+            "audioformat": "mp3",
+            "ratelimit": "2M",
+            "audioquality": "0",
+            "noplaylist": True,
+            "call_home": False,
+            "prefer_ffmpeg": True,
+            "ignoreerrors": True
+        }
