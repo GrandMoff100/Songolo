@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "Songolo"
+version = "0.0.1"
+description = "A self-hosted git-based music server."
+authors = ["GrandMoff100 <minecraftcrusher100@gmail.com>"]
+license = "GNUv3-or-later"
+
+[tool.poetry.dependencies]
+python = "^3.8"
+pygit = "^0.1"
+youtube_dl = "^2021.12.17"
+
+[tool.poetry.dev-dependencies]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
