@@ -1,29 +1,52 @@
 import hashlib
+from pathlib import Path
 import json
 import os
-from typing import Dict, Optional
+from dataclasses import field
+from typing import Dict, Optional, Any
 
 import eyed3  # type: ignore[import]
 import youtube_dl  # type: ignore[import]
-from pydantic import BaseModel
-from pygit2 import Repository  # type: ignore[import]
+from pydantic import BaseModel, HttpUrl
+from pydantic.dataclasses import dataclass
+from git import Repo, Actor  # type: ignore[import]
 
 
 class Library(BaseModel):
-    path: str = None
-    prefix = "[Songolo] "
+    path: Optional[Path] = None
+    remote: Optional[HttpUrl] = None
+    prefix: str = "[Songolo] "
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         if self.path is None:
-            self.path = ".songolo"
-            os.mkdir(self.path)
-        if not os.path.exists(self.path):
-            raise OSError(f"Directory {self.path!r} does not exist.")
-        self.repo = Repository(self.path)
+            self.path = Path(".songolo")
+        Repo.init(self.path, mkdir=True, initial_branch="master")        
 
-    def cleanse_working_tree(self):
-        pass
+    @property
+    def actor(self) -> Actor:
+        return Actor("Songolo Storage <songolo-storage@users.noreply.github.com>")
+
+    @property
+    def repo(self):
+        return Repo(self.path)
+
+    def cleanse_master(self):
+        if not self.repo.active_branch.name == "master":
+            self.repo.heads.master.checkout()
+        for file in self.path.glob("*.mp3"):
+            self.repo.add([file])
+            os.remove(file)
+        self.repo.index.commit(
+            self.prefix + json.dumps(
+                {
+                    "job": "cleanse",
+                    "details": {}
+                }
+            ),
+            author=self.actor,
+            skip_hooks=True
+        )
 
     def songs(self):
         pass
@@ -33,18 +56,22 @@ class Song(BaseModel):
     author: str
     title: str
     link: str
-    prefix: str = "mp3"
     extras: Dict[str, str] = {}
     content: Optional[bytes] = None
-    library: Library = Library()
+    library: Optional[Library] = Library()
 
+    @property
     def digest(self) -> str:
         text = f"{self.author} {self.title} {self.link}"
         return hashlib.sha256(text.encode()).hexdigest()
 
+    @property
+    def filename(self) -> str:
+        return f"{self.digest()}.mp3"
+
     def save(self):
         if self.content:
-            path = os.path.join(self.library.path, f"{self.digest()}.{self.prefix}")
+            path = os.path.join(self.library.path,)
             with open(path, "wb") as f:
                 f.write(self.content)
             meta = eyed3.load(path)
@@ -53,19 +80,34 @@ class Song(BaseModel):
             meta.tag.link = self.link
             meta.tag.extras = json.dumps(self.extras)
             meta.tag.save()
+            self.commit()
+    
+    def commit(self):
+        new_head = self.library.repo.create_head(f"song/{self.digest}", commit=self.repo.commit("master"))
+        new_head.checkout()
+        self.library.repo.index.add([self.filename])
+        self.library.repo.index.commit(
+            self.library.prefix + json.dumps(
+                {
+                    "job": "import",
+                    "details": {}
+                }
+            ),
+            author=self.library.actor
+        )
+        self.repo.heads.master.checkout()
+        self.repo.git.merge(f"song/{self.digest}", no_commit=True)
+        self.library.cleanse_master()
 
     def download(self):
-        with youtube_dl.YoutubeDL(self.options) as ydl:
+        with youtube_dl.YoutubeDL(self._options) as ydl:
             ydl.download([self.link])
+        self.save()
 
-    def _options(self):
+    @property
+    def _options(self) -> Dict[str, Any]:
+        """Returns our download options for YoutubeDL."""
         return {
-            "extractaudio": True,
-            "audioformat": "mp3",
-            "ratelimit": "2M",
-            "audioquality": "0",
-            "noplaylist": True,
-            "call_home": False,
-            "prefer_ffmpeg": True,
-            "ignoreerrors": True
+            "config_location": "download.conf",
+            "outtmpl": f"{self.library.path.absolute()}/{self.digest}.%(ext)s"
         }
