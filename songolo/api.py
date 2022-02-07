@@ -1,6 +1,6 @@
 from fastapi import APIRouter
-from .songs import Library, Song
 
+from .songs import Library
 
 router = APIRouter()
 

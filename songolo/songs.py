@@ -1,27 +1,23 @@
 import hashlib
-from pathlib import Path
 import json
 import os
-import gitdb
-from dataclasses import field
-from typing import Dict, Optional, Any
+from pathlib import Path
+from typing import Any, Dict, Generator, Optional
 
 import eyed3  # type: ignore[import]
+import gitdb  # type: ignore[import]
 import youtube_dl  # type: ignore[import]
+from git import Actor, Repo  # type: ignore[import]
 from pydantic import BaseModel, HttpUrl
-from pydantic.dataclasses import dataclass
-from git import Repo, Actor  # type: ignore[import]
 
 
 class Library(BaseModel):
-    path: Optional[Path] = None
+    path: Path = Path(".songolo")
     remote: Optional[HttpUrl] = None
     prefix: str = "[Songolo] "
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        if self.path is None:
-            self.path = Path(".songolo")
         Repo.init(self.path, mkdir=True, initial_branch="master")
         try:
             self.repo.commit("master")
@@ -30,13 +26,20 @@ class Library(BaseModel):
 
     @property
     def actor(self) -> Actor:
-        return Actor("Songolo Storage", "songolo-storage@users.noreply.github.com")
+        return Actor(
+            "Songolo Storage", "songolo-storage@users.noreply.github.com"
+        )
 
     def first_commit(self):
-        with open((file := self.path.joinpath("README.md")), "w") as f:
-            f.write("# Songolo Storage\n\nThis is the storage directory for your Songolo instance.\n")
+        with open(self.path.joinpath("README.md"), "w") as f:
+            f.write(
+                "# Songolo Storage\n\n"
+                "This is the storage directory for your Songolo instance.\n"
+            )
         self.repo.index.add(["README.md"])
-        self.repo.index.commit(self.prefix + "Initial Commit", author=self.actor)
+        self.repo.index.commit(
+            self.prefix + "Initial Commit", author=self.actor
+        )
 
     @property
     def repo(self):
@@ -48,29 +51,25 @@ class Library(BaseModel):
         for file in self.path.glob("*.mp3"):
             os.remove(str(file))
         self.repo.index.commit(
-            self.prefix + json.dumps(
-                {
-                    "job": "cleanse",
-                    "details": {}
-                }
-            ),
+            self.prefix + json.dumps({"entry": "cleanse", "details": {}}),
             author=self.actor,
-            skip_hooks=True
+            skip_hooks=True,
         )
 
-    def songs(self, max_count=9999):
+    def songs(self, max_count=9999) -> Generator["Song", None, None]:
         for commit in self.repo.iter_commits("master", max_count=max_count):
-            yield commit
-
+            data = json.loads(commit.message.replace(self.prefix, "", 1))
+            if data.get("job") == "import":
+                yield Song(library=self, **data.get("details", {}))
 
 
 class Song(BaseModel):
     author: str
     title: str
-    link: str
+    link: Optional[str] = None
     extras: Dict[str, str] = {}
     content: Optional[bytes] = None
-    library: Optional[Library] = Library()
+    library: Library = Library()
 
     @property
     def digest(self) -> str:
@@ -96,13 +95,16 @@ class Song(BaseModel):
     def commit(self):
         self.library.repo.index.add([str(self.filename)])
         self.library.repo.index.commit(
-            self.library.prefix + json.dumps(
+            self.library.prefix
+            + json.dumps(
                 {
-                    "job": "import",
-                    "details": dict(author=self.author, title=self.title, link=self.link)
+                    "entry": "import",
+                    "details": dict(
+                        author=self.author, title=self.title, link=self.link
+                    ),
                 }
             ),
-            author=self.library.actor
+            author=self.library.actor,
         )
         self.library.repo.git.checkout("master")
         self.library.repo.git.merge(f"song/{self.digest}", no_commit=True)
@@ -127,13 +129,17 @@ class Song(BaseModel):
         """Returns our download options for YoutubeDL."""
         return {
             "format": "bestaudio/best",
-            "postprocessors": [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            }],
+            "postprocessors": [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "192",
+                }
+            ],
             "noplaylist": True,
             "call_home": False,
             "prefer_ffmpeg": True,
-            "outtmpl": str(self.library.path.absolute().joinpath(f"{self.digest}.%(ext)s"))
+            "outtmpl": str(
+                self.library.path.absolute().joinpath(f"{self.digest}.%(ext)s")
+            ),
         }
