@@ -2,6 +2,7 @@ import hashlib
 from pathlib import Path
 import json
 import os
+import gitdb
 from dataclasses import field
 from typing import Dict, Optional, Any
 
@@ -21,11 +22,21 @@ class Library(BaseModel):
         super().__init__(*args, **kwargs)
         if self.path is None:
             self.path = Path(".songolo")
-        Repo.init(self.path, mkdir=True, initial_branch="master")        
+        Repo.init(self.path, mkdir=True, initial_branch="master")
+        try:
+            self.repo.commit("master")
+        except gitdb.exc.BadName:
+            self.first_commit()
 
     @property
     def actor(self) -> Actor:
-        return Actor("Songolo Storage <songolo-storage@users.noreply.github.com>")
+        return Actor("Songolo Storage", "songolo-storage@users.noreply.github.com")
+
+    def first_commit(self):
+        with open((file := self.path.joinpath("README.md")), "w") as f:
+            f.write("# Songolo Storage\n\nThis is the storage directory for your Songolo instance.\n")
+        self.repo.index.add(["README.md"])
+        self.repo.index.commit(self.prefix + "Initial Commit", author=self.actor)
 
     @property
     def repo(self):
@@ -33,10 +44,9 @@ class Library(BaseModel):
 
     def cleanse_master(self):
         if not self.repo.active_branch.name == "master":
-            self.repo.heads.master.checkout()
+            self.repo.git.checkout("master", no_commit=True)
         for file in self.path.glob("*.mp3"):
-            self.repo.add([file])
-            os.remove(file)
+            os.remove(str(file))
         self.repo.index.commit(
             self.prefix + json.dumps(
                 {
@@ -48,8 +58,10 @@ class Library(BaseModel):
             skip_hooks=True
         )
 
-    def songs(self):
-        pass
+    def songs(self, max_count=9999):
+        for commit in self.repo.iter_commits("master", max_count=max_count):
+            yield commit
+
 
 
 class Song(BaseModel):
@@ -67,47 +79,61 @@ class Song(BaseModel):
 
     @property
     def filename(self) -> str:
-        return f"{self.digest()}.mp3"
+        return f"{self.digest}.mp3"
 
     def save(self):
-        if self.content:
-            path = os.path.join(self.library.path,)
-            with open(path, "wb") as f:
-                f.write(self.content)
-            meta = eyed3.load(path)
-            meta.tag.artist = self.author
-            meta.tag.title = self.title
-            meta.tag.link = self.link
-            meta.tag.extras = json.dumps(self.extras)
-            meta.tag.save()
-            self.commit()
-    
+        path = self.library.path.joinpath(self.filename)
+        with open(path, "wb") as f:
+            f.write(self.content)
+        meta = eyed3.load(path)
+        meta.tag.artist = self.author
+        meta.tag.title = self.title
+        meta.tag.link = self.link
+        meta.tag.extras = json.dumps(self.extras)
+        meta.tag.save()
+        self.commit()
+
     def commit(self):
-        new_head = self.library.repo.create_head(f"song/{self.digest}", commit=self.repo.commit("master"))
-        new_head.checkout()
-        self.library.repo.index.add([self.filename])
+        self.library.repo.index.add([str(self.filename)])
         self.library.repo.index.commit(
             self.library.prefix + json.dumps(
                 {
                     "job": "import",
-                    "details": {}
+                    "details": dict(author=self.author, title=self.title, link=self.link)
                 }
             ),
             author=self.library.actor
         )
-        self.repo.heads.master.checkout()
-        self.repo.git.merge(f"song/{self.digest}", no_commit=True)
+        self.library.repo.git.checkout("master")
+        self.library.repo.git.merge(f"song/{self.digest}", no_commit=True)
         self.library.cleanse_master()
 
     def download(self):
+        branch = f"song/{self.digest}"
+        if branch not in map(str, self.library.repo.branches):
+            commit = self.library.repo.commit("master")
+            self.library.repo.git.checkout(commit, b=branch)
+        else:
+            self.library.repo.git.checkout(branch)
+
         with youtube_dl.YoutubeDL(self._options) as ydl:
             ydl.download([self.link])
+        with open(self.library.path.joinpath(self.filename), "rb") as f:
+            self.content = f.read()
         self.save()
 
     @property
     def _options(self) -> Dict[str, Any]:
         """Returns our download options for YoutubeDL."""
         return {
-            "config_location": "download.conf",
-            "outtmpl": f"{self.library.path.absolute()}/{self.digest}.%(ext)s"
+            "format": "bestaudio/best",
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }],
+            "noplaylist": True,
+            "call_home": False,
+            "prefer_ffmpeg": True,
+            "outtmpl": str(self.library.path.absolute().joinpath(f"{self.digest}.%(ext)s"))
         }
