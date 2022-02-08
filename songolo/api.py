@@ -34,9 +34,13 @@ async def get_song(
 @router.put("/songs/{sha}", response_model=SongOut)
 async def update_song(
     sha: str,
+    updated_song: Song,
     library: Library = Library(),
 ):
-    return library.get_song(sha)
+    song = library.get_song(sha)
+    song.meta = updated_song.meta
+    
+    return song
 
 
 @router.get("/songs/{sha}/content", response_class=StreamingResponse)
@@ -64,7 +68,7 @@ class Source(str, Enum):
 
 
 @router.post("/songs/import/{source}", response_model=SongOut)
-async def update_song(
+async def import_song(
     song: Song,
     source: Source,
     library: Library = Library(),

@@ -25,7 +25,7 @@ songs = [
             link="https://open.spotify.com/track/6kcHg7XL6SKyPNd78daRBL?si=612bf861a2364a6b"
         )
     )
-][2:]
+]
 
 
 for song in songs:

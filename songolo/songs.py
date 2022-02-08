@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Generator, Optional, Tuple
 
+from uuid import UUID
 import eyed3  # type: ignore[import]
 import gitdb  # type: ignore[import]
 import youtube_dl  # type: ignore[import]
@@ -67,38 +68,20 @@ class Library(BaseModel):
         )
 
     def songs(self, max_count=9999) -> Generator["Song", None, None]:
-        for commit in self.repo.iter_commits(
-            self.initial_branch, max_count=max_count
-        ):
-            summary = commit.summary
-            if isinstance(summary, bytes):
-                summary = summary.decode()
-            if summary.startswith(self.prefix):
-                json_data = summary.replace(self.prefix, "", 1)
-                data = json.loads(json_data)
-                if data.get("entry") == "import":
-                    yield Song(
-                        library=self,
-                        meta=MetaData(**data.get("details", {})),
-                    )
+        for commit, data in self.commit_data_history:
+            if data.get("entry") == "import":
+                yield Song(
+                    library=self,
+                    meta=MetaData(**data.get("details", {})),
+                )
 
-    def get_song(self, sha: str) -> Optional["Song"]:
-        try:
-            commit = self.repo.commit(sha)
-        except gitdb.exc.BadName:
-            return
-        else:
-            summary = commit.summary
-            if isinstance(summary, bytes):
-                summary = summary.decode()
-            if summary.startswith(self.prefix):
-                json_data = summary.replace(self.prefix, "", 1)
-                data = json.loads(json_data)
-                if data.get("entry") == "import":
-                    return Song(
-                        library=self,
-                        meta=MetaData(**data.get("details", {})),
-                    )
+    def get_song(self, snowflake: str) -> Optional["Song"]:
+        for commit, data in self.commit_data_history:
+            if data.get("entry") == "import":
+                return Song(
+                    library=self,
+                    meta=MetaData(**data.get("details", {})),
+                )
 
     def load_song_content(self, song: "Song") -> Optional[bytes]:
         exists, commit = song.exists_in_history
@@ -109,7 +92,21 @@ class Library(BaseModel):
                 content = f.read()
             self.repo.git.checkout(self.initial_branch)
             return content
-        return None
+
+    @property
+    def commit_data_history(self):
+        for commit in self.repo.iter_commits(
+            self.initial_branch,
+            max_count=9999,
+            reversed=True
+        ):
+            message = commit.message
+            if isinstance(message, bytes):
+                message = message.decode()
+            if message.startswith(self.prefix):
+                json_data = message.replace(self.prefix, "", 1)
+                data = json.loads(json_data)
+                yield commit, data
 
 
 class MetaData(BaseModel):
@@ -136,6 +133,7 @@ class MetaData(BaseModel):
 class Song(BaseModel):
     meta: MetaData
     content: Optional[bytes] = None
+    swowflake: UUID
     library: Library = Library()
 
     def __init__(self, *args, **kwargs):
@@ -144,33 +142,25 @@ class Song(BaseModel):
             self.content = self.library.load_song_content(self)
 
     @property
-    def digest(self) -> str:
-        text = f"{self.meta.artist} - {self.meta.title}"
-        return hashlib.sha256(text.encode()).hexdigest()
+    def digest(self) -> Optional[str]:
+        if self.content is not None:
+            return hashlib.sha256(self.content).hexdigest()
+        raise ValueError("Cannot hash a song with no content.")
 
     @property
     def branch(self) -> str:
-        return f"song/{self.digest}"
+        return f"song/{self.snowflake}"
 
     @property
     def exists_in_history(self) -> Tuple[bool, Optional[Commit]]:
-        for commit in self.library.repo.iter_commits(
-            self.library.initial_branch,
-            max_count=9999,
-        ):
-            summary = commit.summary
-            if isinstance(summary, bytes):
-                summary = summary.decode()
-            if summary.startswith(self.library.prefix):
-                json_data = summary.replace(self.library.prefix, "", 1)
-                data = json.loads(json_data)
-                if data.get("entry") == "song":
-                    if details := data.get("details"):
-                        constant_data = super().dict()
-                        testing_data = constant_data.copy()
-                        testing_data.update(meta=details)
-                        if constant_data == testing_data:
-                            return True, commit
+        for commit, data in self.commit_data_history:
+            if data.get("entry") == "song":
+                if details := data.get("details"):
+                    constant_data = super().dict()
+                    testing_data = constant_data.copy()
+                    testing_data.update(meta=details)
+                    if constant_data == testing_data:
+                        return True, commit
         return False, None
 
     @property
@@ -180,7 +170,7 @@ class Song(BaseModel):
 
     @property
     def filename(self) -> str:
-        return f"{self.digest}.mp3"
+        return f"{self.snowflake}.mp3"
 
     @property
     def filepath(self) -> Path:
@@ -190,13 +180,15 @@ class Song(BaseModel):
         path = self.library.path.joinpath(self.filename)
         meta = eyed3.load(path)
         for attr, value in self.meta.dict().items():
+            if self.meta.link:
+                meta.tag.comment = self.meta.link
+                continue
             setattr(meta.tag, attr, value)
-        if self.meta.link:
-            meta.tag.comment = self.meta.link
+        
         meta.tag.save()
 
     def commit_file(self) -> None:
-        self.library.repo.index.add([str(self.filename)])
+        self.library.repo.index.add([self.filename])
         self.library.repo.index.commit(
             self.library.prefix
             + json.dumps(
@@ -208,7 +200,7 @@ class Song(BaseModel):
             author=self.library.actor,
         )
         self.library.repo.git.checkout(self.library.initial_branch)
-        self.library.repo.git.merge(f"song/{self.digest}", no_commit=True)
+        self.library.repo.git.merge(self.branch, no_commit=True)
         self.library.cleanse_master()
 
     def scrape_from_youtube(self) -> None:
@@ -234,7 +226,7 @@ class Song(BaseModel):
         elif source == "upload":
             with open(self.filepath, "wb") as f:
                 f.write(self.content)
-        
+
         if override_meta:
             self.save_metadata()
         self.commit_file()
@@ -255,7 +247,7 @@ class Song(BaseModel):
             "call_home": False,
             "prefer_ffmpeg": True,
             "outtmpl": str(
-                self.library.path.absolute().joinpath(f"{self.digest}.%(ext)s")
+                self.library.path.absolute().joinpath(f"{self.snowflake}.%(ext)s")
             ),
         }
 
