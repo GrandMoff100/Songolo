@@ -1,14 +1,17 @@
 import hashlib
 import json
-import os
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Generator, Optional
+from typing import Any, Dict, Generator, Optional, Tuple
 
 import eyed3  # type: ignore[import]
 import gitdb  # type: ignore[import]
 import youtube_dl  # type: ignore[import]
 from git import Actor, Repo
+from git.objects.commit import Commit
 from pydantic import BaseModel, HttpUrl
+
+from songolo.utils import Base64
 
 
 class Library(BaseModel):
@@ -19,7 +22,12 @@ class Library(BaseModel):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        Repo.init(self.path, mkdir=True, initial_branch=self.initial_branch)
+        self.path = self.path.absolute()
+        Repo.init(
+            self.path,
+            mkdir=True,
+            initial_branch=self.initial_branch,
+        )
         try:
             self.repo.commit("master")
         except gitdb.exc.BadName:
@@ -31,11 +39,12 @@ class Library(BaseModel):
             "Songolo Storage", "songolo-storage@users.noreply.github.com"
         )
 
-    def first_commit(self):
-        with open(self.path.joinpath("README.md"), "w") as f:
+    def first_commit(self) -> None:
+        with open(self.path.joinpath("README.md").absolute(), "w") as f:
             f.write(
                 "# Songolo Storage\n\n"
                 "This is the storage directory for your Songolo instance.\n"
+                f"Created `{datetime.now()}`"
             )
         self.repo.index.add(["README.md"])
         self.repo.index.commit(
@@ -44,13 +53,13 @@ class Library(BaseModel):
         )
 
     @property
-    def repo(self):
+    def repo(self) -> Repo:
         return Repo(self.path)
 
-    def cleanse_master(self):
+    def cleanse_master(self) -> None:
         self.repo.git.checkout(self.initial_branch)
         for file in self.path.glob("*.mp3"):
-            os.remove(str(file))
+            self.repo.git.rm(str(file.absolute()))
         self.repo.index.commit(
             self.prefix + json.dumps({"entry": "cleanse", "details": {}}),
             author=self.actor,
@@ -58,24 +67,49 @@ class Library(BaseModel):
         )
 
     def songs(self, max_count=9999) -> Generator["Song", None, None]:
-        for commit in self.repo.iter_commits(self.initial_branch, max_count=max_count):
-            if commit.message.startswith(self.prefix):
-                json_data = commit.message.replace(self.prefix, "", 1)
+        for commit in self.repo.iter_commits(
+            self.initial_branch, max_count=max_count
+        ):
+            summary = commit.summary
+            if isinstance(summary, bytes):
+                summary = summary.decode()
+            if summary.startswith(self.prefix):
+                json_data = summary.replace(self.prefix, "", 1)
                 data = json.loads(json_data)
                 if data.get("entry") == "import":
-                    print(commit.diff())
                     yield Song(
-                        library=self, meta=MetaData(**data.get("details", {}))
+                        library=self,
+                        meta=MetaData(**data.get("details", {})),
                     )
 
-    def load_song(self, song: "Song") -> Optional[bytes]:
-        exists, commit = self.exists_in_history
+    def get_song(self, sha: str) -> Optional["Song"]:
+        try:
+            commit = self.repo.commit(sha)
+        except gitdb.exc.BadName:
+            return
+        else:
+            summary = commit.summary
+            if isinstance(summary, bytes):
+                summary = summary.decode()
+            if summary.startswith(self.prefix):
+                json_data = summary.replace(self.prefix, "", 1)
+                data = json.loads(json_data)
+                if data.get("entry") == "import":
+                    return Song(
+                        library=self,
+                        meta=MetaData(**data.get("details", {})),
+                    )
+
+    def load_song_content(self, song: "Song") -> Optional[bytes]:
+        exists, commit = song.exists_in_history
         if exists:
             self.repo.git.checkout(commit)
+            self.repo.git.reset(hard=True)
             with open(song.filepath, "rb") as f:
                 content = f.read()
             self.repo.git.checkout(self.initial_branch)
             return content
+        return None
 
 
 class MetaData(BaseModel):
@@ -88,8 +122,15 @@ class MetaData(BaseModel):
     composer: Optional[str] = None
     link: Optional[str] = None
 
-    def effective_dict(self):
-        return dict([*filter(lambda item: bool(item[1]), self.dict().items())])
+    def dict(self, *args, **kwargs):
+        return dict(
+            [
+                *filter(
+                    lambda item: bool(item[1]),
+                    super().dict(*args, **kwargs).items(),
+                )
+            ]
+        )
 
 
 class Song(BaseModel):
@@ -99,7 +140,8 @@ class Song(BaseModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.content = self.library.load_song(self)
+        if self.content is None:
+            self.content = self.library.load_song_content(self)
 
     @property
     def digest(self) -> str:
@@ -111,19 +153,30 @@ class Song(BaseModel):
         return f"song/{self.digest}"
 
     @property
-    def exists_in_history(self) -> bool:
-        for commit in self.library.repo.iter_commits(self.library.initial_branch, max_count=9999):
-            if commit.message.startswith(self.library.prefix):
-                json_data = commit.message.replace(self.library.prefix, "", 1)
+    def exists_in_history(self) -> Tuple[bool, Optional[Commit]]:
+        for commit in self.library.repo.iter_commits(
+            self.library.initial_branch,
+            max_count=9999,
+        ):
+            summary = commit.summary
+            if isinstance(summary, bytes):
+                summary = summary.decode()
+            if summary.startswith(self.library.prefix):
+                json_data = summary.replace(self.library.prefix, "", 1)
                 data = json.loads(json_data)
-                if data.get("entry") == "import":
+                if data.get("entry") == "song":
                     if details := data.get("details"):
-                        constant_data = self.dict()
+                        constant_data = super().dict()
                         testing_data = constant_data.copy()
-                        testing_data.update(details)
+                        testing_data.update(meta=details)
                         if constant_data == testing_data:
                             return True, commit
         return False, None
+
+    @property
+    def commit(self) -> Optional[Commit]:
+        _, commit = self.exists_in_history
+        return commit
 
     @property
     def filename(self) -> str:
@@ -136,20 +189,20 @@ class Song(BaseModel):
     def save_metadata(self) -> None:
         path = self.library.path.joinpath(self.filename)
         meta = eyed3.load(path)
-        for attr, value in self.meta.effective_dict().items():
+        for attr, value in self.meta.dict().items():
             setattr(meta.tag, attr, value)
         if self.meta.link:
             meta.tag.comment = self.meta.link
         meta.tag.save()
 
-    def commit(self) -> None:
+    def commit_file(self) -> None:
         self.library.repo.index.add([str(self.filename)])
         self.library.repo.index.commit(
             self.library.prefix
             + json.dumps(
                 {
-                    "entry": "import",
-                    "details": self.meta.effective_dict(),
+                    "entry": "song",
+                    "details": self.meta.dict(),
                 }
             ),
             author=self.library.actor,
@@ -158,20 +211,33 @@ class Song(BaseModel):
         self.library.repo.git.merge(f"song/{self.digest}", no_commit=True)
         self.library.cleanse_master()
 
-    def download(self, override_meta=True) -> None:
-        self.library.repo.git.checkout(self.library.initial_branch)
-        if self.branch not in map(str, self.library.repo.branches):
-            commit = self.library.repo.commit(self.library.initial_branch)
-            self.library.repo.git.checkout(commit, b=self.branch)
-        else:
-            self.library.repo.git.checkout(self.branch)
+    def scrape_from_youtube(self) -> None:
         with youtube_dl.YoutubeDL(self._options) as ydl:
             ydl.download([self.meta.link])
         with open(self.library.path.joinpath(self.filename), "rb") as f:
             self.content = f.read()
+
+    def download(self, source: str, override_meta=True):
+        if self.branch not in map(
+            str,
+            self.library.repo.branches,
+        ):  # type: ignore[call-overload]
+            commit = self.library.repo.commit(self.library.initial_branch)
+            self.library.repo.git.checkout(commit, b=self.branch)
+        else:
+            self.library.repo.git.checkout(self.branch)
+        
+        if source == "youtube":
+            self.scrape_from_youtube()
+        elif source == "spotify":
+            raise NotImplementedError("Sorry :( Spotify not implementated yet")
+        elif source == "upload":
+            with open(self.filepath, "wb") as f:
+                f.write(self.content)
+        
         if override_meta:
             self.save_metadata()
-        self.commit()
+        self.commit_file()
 
     @property
     def _options(self) -> Dict[str, Any]:
@@ -192,8 +258,10 @@ class Song(BaseModel):
                 self.library.path.absolute().joinpath(f"{self.digest}.%(ext)s")
             ),
         }
-    
+
     def dict(self, *args, **kwargs) -> Dict[str, Any]:
         result = super().dict(*args, **kwargs)
-        result.update(meta=self.meta.effective_dict())
+        result.update(meta=self.meta.dict())
+        result.update(content=Base64.encode(self.content))
+        result.update(sha=self.commit.hexsha)
         return result
