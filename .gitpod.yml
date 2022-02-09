@@ -1,5 +1,6 @@
 tasks:
   - init: |
       yes | sudo apt-get install ffmpeg
+  - command: |
       python -m pip install poetry
       python -m poetry install
