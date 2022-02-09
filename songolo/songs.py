@@ -4,7 +4,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Generator, Optional, Tuple
 
-from uuid import UUID
 import eyed3  # type: ignore[import]
 import gitdb  # type: ignore[import]
 import youtube_dl  # type: ignore[import]
@@ -68,7 +67,7 @@ class Library(BaseModel):
         )
 
     def songs(self, max_count=9999) -> Generator["Song", None, None]:
-        for commit, data in self.commit_data_history:
+        for commit, data in self.library.commit_data_history:
             if data.get("entry") == "import":
                 yield Song(
                     library=self,
@@ -133,13 +132,16 @@ class MetaData(BaseModel):
 class Song(BaseModel):
     meta: MetaData
     content: Optional[bytes] = None
-    swowflake: UUID
+    snowflake: str = None
     library: Library = Library()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self.content is None:
             self.content = self.library.load_song_content(self)
+        if self.snowflake is None:
+            self.snowflake = "abc"  # TODO: Implement song snowflakes
+            
 
     @property
     def digest(self) -> Optional[str]:
@@ -153,7 +155,7 @@ class Song(BaseModel):
 
     @property
     def exists_in_history(self) -> Tuple[bool, Optional[Commit]]:
-        for commit, data in self.commit_data_history:
+        for commit, data in self.library.commit_data_history:
             if data.get("entry") == "song":
                 if details := data.get("details"):
                     constant_data = super().dict()

@@ -1,4 +1,5 @@
 tasks:
-  - command: |
-      python -m pip install poetry
-      python -m poetry install
+  - init: |
+      pip install poetry
+      poetry install
+  - command: poetry run uvicorn songolo:app --host 0.0.0.0 --port 8080 --reload
