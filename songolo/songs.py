@@ -98,7 +98,7 @@ class Library(BaseModel):
         for commit in self.repo.iter_commits(
             self.initial_branch,
             max_count=9999,
-            reversed=True
+            reverse=True
         ):
             message = commit.message
             if isinstance(message, bytes):
