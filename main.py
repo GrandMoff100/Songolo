@@ -1,7 +1,6 @@
 from songolo.songs import Library, MetaData, Song
 from songolo.utils import sha256_snowflake
 
-
 lib = Library(path="dist")
 
 
@@ -16,7 +15,7 @@ songs = [
                 link="https://www.youtube.com/watch?v=7U-9NlSmNKc",
                 snowflake=sha256_snowflake(),
             ),
-        )
+        ),
     ),
     Song(
         library=lib,
@@ -28,19 +27,18 @@ songs = [
             ),
             artist="The Weeknd",
             title="Blinding Lights",
-            
-        )
+        ),
     ),
     Song(
         library=lib,
         meta=MetaData(
             extras=dict(
                 snowflake=sha256_snowflake(),
-                link="https://open.spotify.com/track/6kcHg7XL6SKyPNd78daRBL?si=612bf861a2364a6b",
+                link="https://open.spotify.com/track/6kcHg7XL6SKyPNd78daRBL",
             ),
             artist="Saint Motel",
             title="My Type",
-        )
+        ),
     ),
 ]
 
@@ -52,5 +50,6 @@ def main():
                 song.download("youtube")
             elif "spotify" in song.meta.link:
                 song.download("spotify")
+
 
 main()

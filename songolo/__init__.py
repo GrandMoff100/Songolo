@@ -1,3 +1,4 @@
+"""Assembles all the routers into a central app."""
 from fastapi import FastAPI
 
 from songolo.api import router as api_router

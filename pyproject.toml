@@ -12,6 +12,7 @@ fastapi = "^0.73.0"
 uvicorn = "^0.17.4"
 eyed3 = "^0.9.6"
 GitPython = "^3.1.26"
+pre-commit = "^2.17.0"
 
 [tool.poetry.dev-dependencies]
 black = "^22.1.0"
@@ -28,3 +29,13 @@ profile = "black"
 
 [tool.black]
 line-length = 79
+
+[tool.pylint.messages_control]
+disable = [
+    "too-few-public-methods",
+    "invalid-name",
+    "missing-function-docstring",
+    "missing-module-docstring",
+    "missing-class-docstring",
+    "import-error"
+]

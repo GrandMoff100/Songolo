@@ -1,21 +1,15 @@
 from enum import Enum
-from io import BytesIO
 from pathlib import Path
-from typing import List
 
-from fastapi import APIRouter, Query, File
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, File
 from pydantic import BaseModel
 
-from songolo.songs import Library, MetaData, Song
+from songolo.songs import MetaData, Song
 from songolo.utils import sha256_snowflake
 
 
 class LibraryOut(BaseModel):
     path: Path
-
-
-router = APIRouter()
 
 
 class NewSong(Song):
@@ -35,7 +29,15 @@ class Source(str, Enum):
     spotify = "spotify"
 
 
-@router.post("/songs/upload")
+router = APIRouter()
+
+
+@router.get("/songs")
+async def get_songs():
+    pass
+
+
+@router.post("/songs/new/upload")
 async def upload_song(
     song: NewSong,
     override_meta: bool = True,
@@ -46,24 +48,19 @@ async def upload_song(
     return song
 
 
-@router.post("/songs/import/{source}", response_model=SongOut)
-async def import_song(
-    song: Song,
-    source: Source,
-):
+@router.post("/songs/new/import/{source}", response_model=SongOut)
+async def import_song(song: Song, source: Source):
     song.download(source)
     return song
 
 
 @router.get("/songs/{snowflake}/log")
-async def get_song_log(
-    library: Library
-):
+async def get_song_log():
     pass
 
 
 @router.get("/songs/{snowflake}/content")
-async def get_song_content(self):
+async def get_song_content():
     pass
 
 
@@ -80,7 +77,3 @@ async def update_song_info():
 @router.delete("/songs/{snowflake}")
 async def delete_song():
     pass
-
-
-
-
