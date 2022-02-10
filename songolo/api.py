@@ -38,8 +38,6 @@ async def update_song(
     library: Library = Library(),
 ):
     song = library.get_song(sha)
-    song.meta = updated_song.meta
-    
     return song
 
 
@@ -49,7 +47,8 @@ async def get_song_content(
     library: Library = Library(),
 ):
     return StreamingResponse(
-        BytesIO(library.get_song(sha).content), media_type="audio/mp3"
+        BytesIO(library.get_song(sha).content),
+        media_type="audio/mp3",
     )
 
 

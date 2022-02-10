@@ -9,14 +9,13 @@ import gitdb  # type: ignore[import]
 import youtube_dl  # type: ignore[import]
 from git import Actor, Repo
 from git.objects.commit import Commit
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 
 from songolo.utils import Base64
 
 
 class Library(BaseModel):
     path: Path = Path(".songolo")
-    remote: Optional[HttpUrl] = None
     prefix: str = "[Songolo] "
     initial_branch: str = "master"
 
@@ -67,7 +66,7 @@ class Library(BaseModel):
         )
 
     def songs(self, max_count=9999) -> Generator["Song", None, None]:
-        for commit, data in self.library.commit_data_history:
+        for commit, data in self.commit_data_history:
             if data.get("entry") == "import":
                 yield Song(
                     library=self,
@@ -95,9 +94,7 @@ class Library(BaseModel):
     @property
     def commit_data_history(self):
         for commit in self.repo.iter_commits(
-            self.initial_branch,
-            max_count=9999,
-            reverse=True
+            self.initial_branch, max_count=9999, reverse=True
         ):
             message = commit.message
             if isinstance(message, bytes):
@@ -133,15 +130,16 @@ class Song(BaseModel):
     meta: MetaData
     content: Optional[bytes] = None
     snowflake: str = None
-    library: Library = Library()
+    library: Optional[Library] = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if self.library is None:
+            self.library = Library()
         if self.content is None:
             self.content = self.library.load_song_content(self)
         if self.snowflake is None:
             self.snowflake = "abc"  # TODO: Implement song snowflakes
-            
 
     @property
     def digest(self) -> Optional[str]:
@@ -186,7 +184,7 @@ class Song(BaseModel):
                 meta.tag.comment = self.meta.link
                 continue
             setattr(meta.tag, attr, value)
-        
+
         meta.tag.save()
 
     def commit_file(self) -> None:
@@ -220,7 +218,7 @@ class Song(BaseModel):
             self.library.repo.git.checkout(commit, b=self.branch)
         else:
             self.library.repo.git.checkout(self.branch)
-        
+
         if source == "youtube":
             self.scrape_from_youtube()
         elif source == "spotify":
@@ -249,7 +247,9 @@ class Song(BaseModel):
             "call_home": False,
             "prefer_ffmpeg": True,
             "outtmpl": str(
-                self.library.path.absolute().joinpath(f"{self.snowflake}.%(ext)s")
+                self.library.path.absolute().joinpath(
+                    f"{self.snowflake}.%(ext)s"
+                )
             ),
         }
 

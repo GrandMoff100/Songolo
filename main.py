@@ -22,9 +22,9 @@ songs = [
         meta=MetaData(
             artist="Saint Motel",
             title="My Type",
-            link="https://open.spotify.com/track/6kcHg7XL6SKyPNd78daRBL?si=612bf861a2364a6b"
+            link="https://open.spotify.com/track/6kcHg7XL6SKyPNd78daRBL?si=612bf861a2364a6b",
         )
-    )
+    ),
 ]
 
 
