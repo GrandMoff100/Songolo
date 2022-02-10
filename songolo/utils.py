@@ -1,4 +1,8 @@
 import base64
+import datetime
+import string
+import random
+import hashlib
 
 
 class Base64:
@@ -13,6 +17,12 @@ class Base64:
 
     @classmethod
     def decode(cls, content: str) -> bytes:
-        return base64.decode(
+        return base64.b64decode(
             content.encode(cls.encoding), altchars=cls.altchars
         )
+
+
+def sha256_snowflake() -> str:
+    source = ''.join(random.choices(string.ascii_uppercase + string.digits, k=256))
+    source += str(datetime.datetime.now())
+    return hashlib.sha256(source.encode()).hexdigest()
