@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Generator, Optional, Tuple
@@ -11,7 +12,7 @@ from git import Actor, Repo
 from git.objects.commit import Commit
 from pydantic import BaseModel
 
-from songolo.utils import Base64
+from songolo.utils import Base64, sha256_snowflake
 
 
 class Library(BaseModel):
@@ -22,8 +23,10 @@ class Library(BaseModel):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.path = self.path.absolute()
+        if not self.path.exists():
+            self.path.mkdir()
         Repo.init(
-            self.path,
+            self.storagepath,
             mkdir=True,
             initial_branch=self.initial_branch,
         )
@@ -33,13 +36,17 @@ class Library(BaseModel):
             self.first_commit()
 
     @property
+    def storagepath(self) -> Path:
+        return self.path.joinpath("songs")
+
+    @property
     def actor(self) -> Actor:
         return Actor(
             "Songolo Storage", "songolo-storage@users.noreply.github.com"
         )
 
     def first_commit(self) -> None:
-        with open(self.path.joinpath("README.md").absolute(), "w") as f:
+        with open(self.storagepath.joinpath("README.md").absolute(), "w") as f:
             f.write(
                 "# Songolo Storage\n\n"
                 "This is the storage directory for your Songolo instance.\n"
@@ -53,7 +60,7 @@ class Library(BaseModel):
 
     @property
     def repo(self) -> Repo:
-        return Repo(self.path)
+        return Repo(self.storagepath)
 
     def cleanse_master(self) -> None:
         self.repo.git.checkout(self.initial_branch)
@@ -80,6 +87,7 @@ class Library(BaseModel):
                     library=self,
                     meta=MetaData(**data.get("details", {})),
                 )
+        return None
 
     def load_song_content(self, song: "Song") -> Optional[bytes]:
         exists, commit = song.exists_in_history
@@ -90,9 +98,17 @@ class Library(BaseModel):
                 content = f.read()
             self.repo.git.checkout(self.initial_branch)
             return content
+        return None
 
     @property
-    def commit_data_history(self):
+    def logpath(self) -> Path:
+        path = self.path.joinpath("logs")
+        if not path.exists():
+            path.mkdir()
+        return path
+
+    @property
+    def commit_data_history(self) -> Generator[Tuple[Commit, Dict[str, Any]], None, None]:
         for commit in self.repo.iter_commits(
             self.initial_branch, max_count=9999, reverse=True
         ):
@@ -113,9 +129,20 @@ class MetaData(BaseModel):
     genre: Optional[str] = None
     year: Optional[str] = None
     composer: Optional[str] = None
-    link: Optional[str] = None
+    extras: Dict[str, str] = {}
 
-    def dict(self, *args, **kwargs):
+    @property    
+    def link(self) -> Optional[str]:
+        return self.extras.get("link")
+
+    @property
+    def snowflake(self) -> str:
+        snowflake = self.extras.get("snowflake")
+        if snowflake is None:
+            raise ValueError("Invalid song! Song does not have a snowflake.")
+        return snowflake
+
+    def dict(self, *args, **kwargs) -> Dict[str, Any]:
         return dict(
             [
                 *filter(
@@ -128,18 +155,22 @@ class MetaData(BaseModel):
 
 class Song(BaseModel):
     meta: MetaData
+    library: Library
     content: Optional[bytes] = None
-    snowflake: str = None
-    library: Optional[Library] = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if self.library is None:
-            self.library = Library()
+        self.logger.addHandler(
+            logging.FileHandler(
+                self.library.logpath.joinpath(f"{self.meta.snowflake}.log"),
+            ),
+        )
         if self.content is None:
             self.content = self.library.load_song_content(self)
-        if self.snowflake is None:
-            self.snowflake = "abc"  # TODO: Implement song snowflakes
+
+    @property
+    def logger(self) -> logging.Logger:
+        return logging.getLogger(self.meta.snowflake)
 
     @property
     def digest(self) -> Optional[str]:
@@ -149,7 +180,7 @@ class Song(BaseModel):
 
     @property
     def branch(self) -> str:
-        return f"song/{self.snowflake}"
+        return f"song/{self.meta.snowflake}"
 
     @property
     def exists_in_history(self) -> Tuple[bool, Optional[Commit]]:
@@ -170,21 +201,20 @@ class Song(BaseModel):
 
     @property
     def filename(self) -> str:
-        return f"{self.snowflake}.mp3"
+        return f"{self.meta.snowflake}.mp3"
 
     @property
     def filepath(self) -> Path:
-        return self.library.path.joinpath(self.filename)
+        return self.library.storagepath.joinpath(self.filename)
 
     def save_metadata(self) -> None:
-        path = self.library.path.joinpath(self.filename)
+        path = self.library.storagepath.joinpath(self.filename)
         meta = eyed3.load(path)
         for attr, value in self.meta.dict().items():
             if self.meta.link:
                 meta.tag.comment = self.meta.link
                 continue
             setattr(meta.tag, attr, value)
-
         meta.tag.save()
 
     def commit_file(self) -> None:
@@ -206,7 +236,7 @@ class Song(BaseModel):
     def scrape_from_youtube(self) -> None:
         with youtube_dl.YoutubeDL(self._options) as ydl:
             ydl.download([self.meta.link])
-        with open(self.library.path.joinpath(self.filename), "rb") as f:
+        with open(self.library.storagepath.joinpath(self.filename), "rb") as f:
             self.content = f.read()
 
     def download(self, source: str, override_meta=True):
@@ -225,7 +255,10 @@ class Song(BaseModel):
             raise NotImplementedError("Sorry :( Spotify not implementated yet")
         elif source == "upload":
             with open(self.filepath, "wb") as f:
-                f.write(self.content)
+                if self.content is not None:
+                    f.write(self.content)
+                else:
+                    raise ValueError("Expected song content but I cannot access it! How did this happen?!")
 
         if override_meta:
             self.save_metadata()
@@ -247,15 +280,16 @@ class Song(BaseModel):
             "call_home": False,
             "prefer_ffmpeg": True,
             "outtmpl": str(
-                self.library.path.absolute().joinpath(
-                    f"{self.snowflake}.%(ext)s"
+                self.library.storagepath.joinpath(
+                    f"{self.meta.snowflake}.%(ext)s"
                 )
             ),
+            "logger": logging.getLogger(self.meta.snowflake)
         }
 
     def dict(self, *args, **kwargs) -> Dict[str, Any]:
         result = super().dict(*args, **kwargs)
         result.update(meta=self.meta.dict())
-        result.update(content=Base64.encode(self.content))
-        result.update(sha=self.commit.hexsha)
+        if self.content is not None:
+            result.update(content=Base64.encode(self.content))
         return result
