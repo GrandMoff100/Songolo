@@ -1,10 +1,16 @@
+
 tasks:
-  - before: |
+  - name: Install and start project
+    before: |
       sudo apt-get install ffmpeg -yq
       pip install poetry
       poetry install
-  - command: uvicorn songolo:app --host 0.0.0.0 --port 8080 --reload
+    command: uvicorn songolo:app --host 0.0.0.0 --port 8080 --reload
 ports:
   - port: 8080
     onOpen: ignore
     visibility: public
+vscode:
+  extensions:
+    - matangover.mypy
+    - ms-python.python
