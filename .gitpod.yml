@@ -1,9 +1,10 @@
-
 tasks:
-  - name: Install and start project
-    before: |
-      sudo apt-get install ffmpeg -yq
+  - name: Install dependencies and start server
+    init: |
+      sudo apt-get update
+      sudo apt-get install -yq ffmpeg
       pip install poetry
+      poetry config virtualenvs.create false
       poetry install
     command: uvicorn songolo:app --host 0.0.0.0 --port 8080 --reload
 ports:
