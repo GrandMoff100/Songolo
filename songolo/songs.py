@@ -1,9 +1,12 @@
 """Module for interacting with and storing songs/audios."""
 import json
 import logging
+import os
+import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Generator, Optional, Tuple
+from typing import Any, Dict, Generator, List, Optional, Tuple
+from unittest.mock import patch
 
 import eyed3  # type: ignore[import]
 import gitdb  # type: ignore[import]
@@ -11,6 +14,9 @@ import youtube_dl  # type: ignore[import]
 from git import Actor, Repo
 from git.objects.commit import Commit
 from pydantic import BaseModel
+from spotdl.download import DownloadManager
+from spotdl.parsers import parse_arguments, parse_query
+from spotdl.search import SpotifyClient
 
 from songolo.utils import Base64
 
@@ -187,11 +193,13 @@ class Song(BaseModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.logger.setLevel(logging.DEBUG)
         self.logger.addHandler(
             logging.FileHandler(
-                self.library.logpath.joinpath(f"{self.meta.snowflake}.log"),
+                self.logpath,
             ),
         )
+        self.logger.info("Log initialized at %s" % str(datetime.now()))
         if self.content is None:
             self.content = self.library.load_song_content(self)
 
@@ -204,6 +212,10 @@ class Song(BaseModel):
     def branch(self) -> str:
         """The git branch that the song exists on."""
         return f"song/{self.meta.snowflake}"
+
+    @property
+    def logpath(self) -> Path:
+        return self.library.logpath.joinpath(f"{self.meta.snowflake}.log")
 
     @property
     def exists_in_history(self) -> Tuple[bool, Optional[Commit]]:
@@ -267,14 +279,18 @@ class Song(BaseModel):
         self.library.cleanse_master()  # Keep the main branch clean.
 
     def scrape_from_youtube(self) -> None:
-        """Uses `youtube_dl` to extract the audio from the link in the song meta-data extras."""
-        with youtube_dl.YoutubeDL(self._options) as ydl:
+        """Uses `youtube_dl` to extract the audio from the youtube link."""
+        with youtube_dl.YoutubeDL(self._youtubedl_options) as ydl:
             ydl.download([self.meta.link])
         with open(
             self.library.storagepath.joinpath(self.filename), "rb"
         ) as file:
             self.content = file.read()
 
+    def scrape_from_spotify(self) -> None:
+        """Uses `spotdl` to to extract audio from the spotify song link."""
+        # TODO: Find spotify downloading module that has suitable logging support.
+        
     def download(self, source: str, override_meta=True):
         """Downloads and commits itself, the song, to the storage from the given source."""
         if self.branch not in map(
@@ -289,7 +305,7 @@ class Song(BaseModel):
         if source == "youtube":
             self.scrape_from_youtube()
         elif source == "spotify":
-            raise NotImplementedError("Sorry :( Spotify not implementated yet")
+            self.scrape_from_spotify()
         elif source == "upload":
             with open(self.filepath, "wb") as file:
                 if self.content is not None:
@@ -300,13 +316,12 @@ class Song(BaseModel):
                         "but I cannot access it! "
                         "How did this happen?!"
                     )
-
         if override_meta:
             self.save_metadata()
         self.commit_file()
 
     @property
-    def _options(self) -> Dict[str, Any]:
+    def _youtubedl_options(self) -> Dict[str, Any]:
         """Returns our download options for YoutubeDL."""
         return {
             "format": "bestaudio/best",
@@ -325,8 +340,19 @@ class Song(BaseModel):
                     f"{self.meta.snowflake}.%(ext)s"
                 )
             ),
-            "logger": logging.getLogger(self.meta.snowflake),
+            "logger": self.logger,
         }
+
+    @property
+    def _spotdl_options(self) -> List[str]:
+        if self.meta.link is None:
+            raise ValueError("Missing spotify link when downloading!!!")
+        return [
+            "spotdl",
+            "--path-template",
+            str(self.filepath.absolute()),
+            self.meta.link,
+        ]
 
     def dict(self, *args, **kwargs) -> Dict[str, Any]:
         """Custom method for converting Song objects into JSON dictionaries."""
