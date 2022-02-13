@@ -1,10 +1,11 @@
-image:
-  file: gitpod.Dockerfile
 tasks:
   - init: |
-      apt-get update
-      apt-get install -yq ffmpeg
-  - init: poetry install
+      sudo apt-get update
+      sudo apt-get install -yq ffmpeg
+  - init: |
+      pip install poetry
+      poetry config virtualenvs.create false
+      poetry install
   - command: uvicorn songolo:app --host 0.0.0.0 --port 8080 --reload
 ports:
   - port: 8080
