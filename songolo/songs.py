@@ -289,38 +289,8 @@ class Song(BaseModel):
 
     def scrape_from_spotify(self) -> None:
         """Uses `spotdl` to to extract audio from the spotify song link."""
-        with patch.object(sys, "argv", self._spotdl_options):
-            arguments = parse_arguments()
-            args_dict = vars(arguments)
-            args_dict["ffmpeg"] = "ffmpeg"
-
-            SpotifyClient.init(
-                client_id="5f573c9620494bae87890c0f08a60293",
-                client_secret="212476d9b0f3472eaa762d90b19b0ba8",
-                user_auth=None,
-            )
-
-            if arguments.output is not None:
-                self.logger.info(
-                    f"Will download to: {os.path.abspath(arguments.output)}"
-                )
-                os.chdir(arguments.output)
-
-            with DownloadManager(args_dict) as downloader:
-                downloader.display_manager.console.file = open(
-                    self.logpath, "a"
-                )
-                song_list = parse_query(
-                    arguments.query,
-                    arguments.output_format,
-                    arguments.use_youtube,
-                    arguments.generate_m3u,
-                    arguments.lyrics_provider,
-                    arguments.search_threads,
-                    arguments.path_template,
-                )
-                downloader.download_multiple_songs(song_list)
-
+        # TODO: Find spotify downloading module that has suitable logging support.
+        
     def download(self, source: str, override_meta=True):
         """Downloads and commits itself, the song, to the storage from the given source."""
         if self.branch not in map(
