@@ -2,8 +2,12 @@ tasks:
   - before: |
       sudo apt-get install ffmpeg -yq
       pip install poetry
+      python -m venv venv
+      poetry env use venv/bin/python
       poetry install
-  - command: uvicorn songolo:app --host 0.0.0.0 --port 8080 --reload
+  - command: |
+      source venv/bin/acticate
+      uvicorn songolo:app --host 0.0.0.0 --port 8080 --reload
 ports:
   - port: 8080
     onOpen: ignore
