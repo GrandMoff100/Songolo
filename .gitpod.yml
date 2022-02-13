@@ -1,12 +1,10 @@
+iamge:
+  file: .gitpod.Dockerfile
 tasks:
-  - before: |
-      sudo apt-get install ffmpeg -yq
-      python -m venv venv
-      ./venv/bin/python3 -m pip install poetry
-      ./venv/bin/python3 -m poetry env use venv/bin/python3
-      python3 -m poetry install
+  - init: |
+      poetry install
   - command: |
-      ./venv/bin/python3 -m uvicorn songolo:app --host 0.0.0.0 --port 8080 --reload
+      uvicorn songolo:app --host 0.0.0.0 --port 8080 --reload
 ports:
   - port: 8080
     onOpen: ignore
